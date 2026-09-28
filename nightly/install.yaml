@@ -733,6 +733,20 @@ spec:
                       Hardened clusters reject unsafeAllowAPIAuditCreation=true.
                     type: boolean
                 type: object
+              controllerJWTMode:
+                description: |-
+                  ControllerJWTMode selects the credential used by the controller for OpenBao.
+                  Shared (also the behavior when omitted) preserves the installation-wide
+                  projected JWT. Target requests a short-lived JWT whose sole audience is
+                  urn:openbao:controller:<metadata.uid>. Prepare the OpenBao controller role
+                  before switching an initialized cluster to Target. Target never falls back
+                  to the shared JWT. Target requires self-init and self-init OIDC to be enabled.
+                  Executor Job authentication is unchanged.
+                  Enforced admission prevents removal or downgrade after selecting Target.
+                enum:
+                - Shared
+                - Target
+                type: string
               deletionPolicy:
                 description: DeletionPolicy controls what happens to underlying resources
                   when the CR is deleted.
@@ -6625,6 +6639,25 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: openbao-operator
+  name: openbao-operator-controller-token
+  namespace: openbao-operator-system
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - openbao-operator-controller
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: openbao-operator
   name: openbao-operator-leader-election-role
@@ -7098,6 +7131,24 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: openbao-operator
+  name: openbao-operator-controller-token
+  namespace: openbao-operator-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-operator-controller-token
+subjects:
+- kind: ServiceAccount
+  name: openbao-operator-controller
+  namespace: openbao-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
     app.kubernetes.io/component: provisioner
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: openbao-operator
@@ -7268,6 +7319,14 @@ spec:
         - /manager
         - controller
         env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
@@ -7279,10 +7338,10 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         - name: OPERATOR_VERSION
-          value: nightly-20260925-4822e595eed8
+          value: nightly-20260928-817dc121b2df
         - name: OPENBAO_JWT_AUDIENCE
           value: openbao-internal
-        image: ghcr.io/dc-tec/openbao-operator@sha256:3e7d65ac0ea925d8c2d72ccc208bed9fbe7000cdecee4b4f9f7693a30436f8d7
+        image: ghcr.io/dc-tec/openbao-operator@sha256:f87d85ca3c33d8bdcb8fcc4322908479cbbd09f4ee323a6ffab025805c9083b6
         livenessProbe:
           httpGet:
             path: /healthz
@@ -7397,8 +7456,8 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         - name: OPERATOR_VERSION
-          value: nightly-20260925-4822e595eed8
-        image: ghcr.io/dc-tec/openbao-operator@sha256:3e7d65ac0ea925d8c2d72ccc208bed9fbe7000cdecee4b4f9f7693a30436f8d7
+          value: nightly-20260928-817dc121b2df
+        image: ghcr.io/dc-tec/openbao-operator@sha256:f87d85ca3c33d8bdcb8fcc4322908479cbbd09f4ee323a6ffab025805c9083b6
         livenessProbe:
           httpGet:
             path: /healthz
@@ -8976,7 +9035,7 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   annotations:
-    openbao.org/admission-policy-fingerprint: sha256:828902329ac47bb74fa1ef8ab7f92d80e1f16b3e2d088b8e585d2dd77b9fd6c1
+    openbao.org/admission-policy-fingerprint: sha256:5a8dec42af4c12ce064c395ea41946fc1c603ee467e72edb5722e30c7011a6ab
   name: openbao-operator-openbao-validate-openbaocluster
 spec:
   failurePolicy: Fail
@@ -8992,6 +9051,16 @@ spec:
       resources:
       - openbaoclusters
   validations:
+  - expression: |-
+      !has(object.spec.controllerJWTMode) || object.spec.controllerJWTMode != "Target" || (has(object.spec.selfInit) && object.spec.selfInit.enabled &&
+
+       has(object.spec.selfInit.oidc) && object.spec.selfInit.oidc.enabled)
+    message: spec.controllerJWTMode Target requires spec.selfInit.enabled and spec.selfInit.oidc.enabled
+  - expression: oldObject == null || !has(oldObject.spec.controllerJWTMode) || oldObject.spec.controllerJWTMode
+      != "Target" || (has(object.spec.controllerJWTMode) && object.spec.controllerJWTMode
+      == "Target")
+    message: spec.controllerJWTMode cannot be downgraded or removed after selecting
+      Target
   - expression: has(object.spec.profile)
     message: spec.profile is required and must be explicitly set to Hardened or Development.
   - expression: |-
