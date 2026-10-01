@@ -578,6 +578,47 @@ spec:
                           Note: This is typically managed by the operator based on spec.tls.enabled.
                           Hardened clusters reject tlsDisable=true.
                         type: boolean
+                      tlsKeyExchangePreferences:
+                        description: |-
+                          TLSKeyExchangePreferences selects allowed key exchange groups on the API
+                          and metrics listeners. List order does not control preference; Go uses its
+                          internal preference order. If omitted, OpenBao uses Go's default groups.
+                          Requires OpenBao >= 2.7.0 and TLS enabled. A list containing only hybrid PQ
+                          groups requires TLSMinVersion=tls13 and rejects classical-only clients.
+                          This setting does not configure cluster traffic on port 8201.
+                        items:
+                          description: |-
+                            TLSKeyExchangeGroup identifies a classical or hybrid post-quantum TLS group.
+                            Pure MLKEM1024 is not supported by the operator's default TLS clients.
+                          enum:
+                          - CurveP256
+                          - CurveP384
+                          - CurveP521
+                          - X25519
+                          - X25519MLKEM768
+                          - SecP256r1MLKEM768
+                          - SecP384r1MLKEM1024
+                          type: string
+                        maxItems: 7
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: set
+                      tlsMaxVersion:
+                        description: |-
+                          TLSMaxVersion sets the maximum TLS version on the API and metrics listeners.
+                          If omitted, OpenBao uses TLS 1.3. TLS must be enabled.
+                        enum:
+                        - tls12
+                        - tls13
+                        type: string
+                      tlsMinVersion:
+                        description: |-
+                          TLSMinVersion sets the minimum TLS version on the API and metrics listeners.
+                          If omitted, OpenBao uses TLS 1.2. TLS must be enabled.
+                        enum:
+                        - tls12
+                        - tls13
+                        type: string
                     type: object
                   logLevel:
                     default: info
@@ -7338,10 +7379,10 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         - name: OPERATOR_VERSION
-          value: nightly-20260929-09495919f6a8
+          value: nightly-20261001-b99f7df00d9b
         - name: OPENBAO_JWT_AUDIENCE
           value: openbao-internal
-        image: ghcr.io/dc-tec/openbao-operator@sha256:58ccfb4ced673dd13075e6ce85ac061e64b3697aaf8c63eef0c7d136f0ec6611
+        image: ghcr.io/dc-tec/openbao-operator@sha256:bea5529c2c0e0c724e35728b5eb941c675b2acde15d1757c48bf591a239798f3
         livenessProbe:
           httpGet:
             path: /healthz
@@ -7456,8 +7497,8 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         - name: OPERATOR_VERSION
-          value: nightly-20260929-09495919f6a8
-        image: ghcr.io/dc-tec/openbao-operator@sha256:58ccfb4ced673dd13075e6ce85ac061e64b3697aaf8c63eef0c7d136f0ec6611
+          value: nightly-20261001-b99f7df00d9b
+        image: ghcr.io/dc-tec/openbao-operator@sha256:bea5529c2c0e0c724e35728b5eb941c675b2acde15d1757c48bf591a239798f3
         livenessProbe:
           httpGet:
             path: /healthz
@@ -9035,7 +9076,7 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   annotations:
-    openbao.org/admission-policy-fingerprint: sha256:5a8dec42af4c12ce064c395ea41946fc1c603ee467e72edb5722e30c7011a6ab
+    openbao.org/admission-policy-fingerprint: sha256:cc749d55f3d9ac98744efae1629b38f6373ede43a6efe273566530a4a01f32a5
   name: openbao-operator-openbao-validate-openbaocluster
 spec:
   failurePolicy: Fail
@@ -9176,6 +9217,25 @@ spec:
       || !has(object.spec.configuration.listener.tlsDisable) || object.spec.configuration.listener.tlsDisable
       != true'
     message: Hardened profile does not allow spec.configuration.listener.tlsDisable=true.
+  - expression: |-
+      !variables.has_listener_tls_policy || (object.spec.tls.enabled &&
+
+       (!has(object.spec.configuration.listener.tlsDisable) || object.spec.configuration.listener.tlsDisable != true))
+    message: spec.configuration.listener TLS policy requires TLS enabled and tlsDisable!=true.
+  - expression: '!variables.has_listener_tls_policy || !has(object.spec.configuration.listener.tlsMinVersion)
+      || !has(object.spec.configuration.listener.tlsMaxVersion) || object.spec.configuration.listener.tlsMinVersion
+      != ''tls13'' || object.spec.configuration.listener.tlsMaxVersion != ''tls12'''
+    message: spec.configuration.listener.tlsMaxVersion must be greater than or equal
+      to tlsMinVersion.
+  - expression: '!variables.has_listener_key_exchange || object.spec.configuration.listener.tlsKeyExchangePreferences.exists(g,
+      g in [''CurveP256'', ''CurveP384'', ''CurveP521'', ''X25519'']) || (has(object.spec.configuration.listener.tlsMinVersion)
+      && object.spec.configuration.listener.tlsMinVersion == ''tls13'')'
+    message: spec.configuration.listener PQ-only key exchange requires tlsMinVersion=tls13.
+  - expression: '!variables.has_listener_key_exchange || variables.listener_key_exchange_version_supported'
+    message: spec.configuration.listener.tlsKeyExchangePreferences requires OpenBao
+      >= 2.7.0.
+  - expression: '!variables.has_listener_key_exchange || variables.listener_key_exchange_current_version_supported'
+    message: Complete the OpenBao >= 2.7.0 upgrade before configuring spec.configuration.listener.tlsKeyExchangePreferences.
   - expression: '!has(object.spec.profile) || object.spec.profile != "Hardened" ||
       !variables.has_backup || !has(object.spec.backup.target.insecureSkipVerify)
       || object.spec.backup.target.insecureSkipVerify != true'
@@ -9602,6 +9662,15 @@ spec:
     message: spec.version cannot be reduced below status.upgrade.targetVersion after
       rolling progress has started.
   variables:
+  - expression: |-
+      has(object.spec.configuration) && has(object.spec.configuration.listener) && (has(object.spec.configuration.listener.tlsMinVersion) ||
+
+       has(object.spec.configuration.listener.tlsMaxVersion) ||
+       has(object.spec.configuration.listener.tlsKeyExchangePreferences))
+    name: has_listener_tls_policy
+  - expression: has(object.spec.configuration) && has(object.spec.configuration.listener)
+      && has(object.spec.configuration.listener.tlsKeyExchangePreferences)
+    name: has_listener_key_exchange
   - expression: has(object.spec.backup)
     name: has_backup
   - expression: 'variables.has_backup && has(object.spec.backup.target.provider) &&
@@ -9732,6 +9801,21 @@ spec:
     name: current_version_valid
   - expression: variables.current_version_core.split(".").map(part, int(part))
     name: current_version_parts
+  - expression: |-
+      variables.spec_version_valid && (variables.spec_version_parts[0] > 2 ||
+
+       (variables.spec_version_parts[0] == 2 && variables.spec_version_parts[1] > 7) ||
+       (variables.spec_version_parts[0] == 2 && variables.spec_version_parts[1] == 7 &&
+        (variables.spec_version_parts[2] > 0 || variables.spec_version_prerelease == "")))
+    name: listener_key_exchange_version_supported
+  - expression: |-
+      variables.current_version_normalized == "" || (variables.current_version_valid &&
+
+       (variables.current_version_parts[0] > 2 ||
+        (variables.current_version_parts[0] == 2 && variables.current_version_parts[1] > 7) ||
+        (variables.current_version_parts[0] == 2 && variables.current_version_parts[1] == 7 &&
+         (variables.current_version_parts[2] > 0 || variables.current_version_prerelease == ""))))
+    name: listener_key_exchange_current_version_supported
   - expression: 'oldObject != null && has(oldObject.status) && has(oldObject.status.upgrade)
       && has(oldObject.status.upgrade.targetVersion) && oldObject.status.upgrade.targetVersion
       != "" ? (oldObject.status.upgrade.targetVersion.startsWith("v") ? oldObject.status.upgrade.targetVersion.substring(1)
