@@ -29,7 +29,7 @@ The operator requires Kubernetes 1.33 or newer. The rows below describe the curr
 | --- | --- | --- |
 | 2.7.1 | Config parser, CI container checks, and focused local lifecycle, rolling-upgrade, and restore qualification | Prepare external plugins before upgrading; see [OpenBao 2.7 migration](../../operate/openbao-270/) |
 | 2.7.0 | Config parser and focused local lifecycle, upgrade, restore, and PKCS#11 qualification; rolling-upgrade source for local 2.7.1 qualification | Use the latest qualified security patch |
-| 2.6.4 | Default CI, nightly, and release target; local lifecycle, rolling-upgrade, backup, and restore qualification | Unreleased `main` baseline; validate the exact environment in staging |
+| 2.6.4 | Default CI, nightly, and release target; local lifecycle, rolling-upgrade, backup, restore, and SoftHSM PKCS#11 and KMIP seal qualification | Unreleased `main` baseline; validate the exact environment in staging |
 | 2.6.3 | OpenBao Operator 0.5.1 validation target; rolling-upgrade source for local 2.6.4 qualification | Use the latest qualified security patch |
 | 2.6.2 | OpenBao Operator 0.5.0 release target | Use the latest qualified security patch |
 | Other 2.6.x | Not individually release-gated | Validate the exact patch in staging |
@@ -70,8 +70,12 @@ The core lifecycle and manager selection passes on each version. Rolling upgrade
 2.7.0 to 2.7.1, and from 2.5.5 to 2.6.4, including operation-lock, recovery, and idle strategy-switch coverage. S3
 backup and `OpenBaoRestore` recovery pass on 2.6.4 with RustFS. Fresh-target restores and scheduled restore tests pass
 on 2.7.1, which restore cluster templates now accept alongside 2.7.0. Policy reconciliation and controller JWT checks
-pass on both versions, and hybrid PQ TLS passes on 2.7.1. These checks do not qualify external unseal providers, cloud
-storage credentials, PKCS#11 on these patches, or other Kubernetes versions and architectures.
+pass on both versions, and hybrid PQ TLS passes on 2.7.1.
+
+The SoftHSM fixture builds on 2.6.4 with the pinned PKCS#11 0.1.0 plugin. On 2.6.4, a SoftHSM-backed PKCS#11 cluster
+and a PyKMIP-backed KMIP cluster each initialize, auto-unseal after a Pod restart, and scale up and back down with the
+seeded key material. These checks do not qualify cloud KMS providers, vendor HSMs, PKCS#11 or KMIP seals on 2.7.1,
+cloud storage credentials, or other Kubernetes versions and architectures.
 
 ## Production upgrade rule
 
